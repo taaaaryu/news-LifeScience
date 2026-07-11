@@ -5,6 +5,11 @@ on:
     branches: [main]
     paths:
       - 'digests/*.md'
+  workflow_dispatch:
+    inputs:
+      file:
+        description: '送信するdigestファイルパス（空なら最新のものを自動選択）'
+        required: false
 
 jobs:
   send-email:
@@ -15,18 +20,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Find digest file(s) added in this push
+      - name: Find digest file(s) to send
         id: find
         run: |
-          before="${{ github.event.before }}"
-          if git cat-file -e "$before" 2>/dev/null; then
-            files=$(git diff --name-only "$before" "${{ github.sha }}" -- 'digests/*.md')
+          manual="${{ github.event.inputs.file }}"
+          if [ -n "$manual" ]; then
+            file="$manual"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            file=$(ls -1 digests/*.md | sort | tail -n1)
           else
-            files=$(git show --name-only --pretty="" "${{ github.sha }}" -- 'digests/*.md')
+            before="${{ github.event.before }}"
+            if git cat-file -e "$before" 2>/dev/null; then
+              files=$(git diff --name-only "$before" "${{ github.sha }}" -- 'digests/*.md')
+            else
+              files=$(git show --name-only --pretty="" "${{ github.sha }}" -- 'digests/*.md')
+            fi
+            file=$(echo "$files" | tail -n1)
           fi
-          file=$(echo "$files" | tail -n1)
           if [ -z "$file" ]; then
-            echo "no digest file changed, skipping"
+            echo "no digest file to send, skipping"
             echo "file=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
