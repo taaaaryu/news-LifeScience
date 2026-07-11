@@ -1,0 +1,48 @@
+name: Send Digest Email
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'digests/*.md'
+
+jobs:
+  send-email:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find digest file(s) added in this push
+        id: find
+        run: |
+          before="${{ github.event.before }}"
+          if git cat-file -e "$before" 2>/dev/null; then
+            files=$(git diff --name-only "$before" "${{ github.sha }}" -- 'digests/*.md')
+          else
+            files=$(git show --name-only --pretty="" "${{ github.sha }}" -- 'digests/*.md')
+          fi
+          file=$(echo "$files" | tail -n1)
+          if [ -z "$file" ]; then
+            echo "no digest file changed, skipping"
+            echo "file=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          echo "date=$(basename "$file" .md)" >> "$GITHUB_OUTPUT"
+
+      - name: Send email
+        if: steps.find.outputs.file != ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.GMAIL_USERNAME }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          subject: "[生命科学ダイジェスト] ${{ steps.find.outputs.date }}"
+          to: taruu6109@gmail.com
+          from: "Life Science Digest <${{ secrets.GMAIL_USERNAME }}>"
+          body: file://${{ steps.find.outputs.file }}
+          convert_markdown: true
