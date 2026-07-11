@@ -9,6 +9,10 @@ permissions:
   contents: write
   models: read
 
+concurrency:
+  group: generate-digest-main
+  cancel-in-progress: true
+
 jobs:
   generate:
     runs-on: ubuntu-latest
@@ -40,14 +44,20 @@ jobs:
         run: |
           git config user.name "life-science-digest-bot"
           git config user.email "actions@github.com"
-          git add digests
-          if git diff --cached --quiet; then
-            echo "no changes to commit"
-            exit 0
-          fi
-          git commit -m "digest: ${{ steps.candidates.outputs.date }}"
+          DIGEST_FILE="digests/${{ steps.candidates.outputs.date }}.md"
+          SOURCE_FILE="${{ steps.inference.outputs.response-file }}"
           for i in 1 2 3; do
-            if git pull --rebase origin main && git push origin main; then
+            git fetch origin main
+            git reset --hard origin/main
+            mkdir -p digests
+            cp "$SOURCE_FILE" "$DIGEST_FILE"
+            git add "$DIGEST_FILE"
+            if git diff --cached --quiet; then
+              echo "no changes to commit"
+              exit 0
+            fi
+            git commit -m "digest: ${{ steps.candidates.outputs.date }}"
+            if git push origin HEAD:main; then
               exit 0
             fi
             sleep 5
