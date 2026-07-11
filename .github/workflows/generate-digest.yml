@@ -30,7 +30,7 @@ jobs:
         uses: actions/ai-inference@v1
         with:
           prompt-file: /tmp/prompt.txt
-          model: openai/gpt-5.6-terra
+          model: openai/gpt-4.1
           max-tokens: 2000
 
       - name: Save digest
