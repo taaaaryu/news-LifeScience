@@ -119,7 +119,10 @@ def collect_candidates():
             time.sleep(0.4)
         if len(ordered_ids) >= 8:
             break
-    return ordered_ids[:30]
+    return ordered_ids[:15]
+
+
+MAX_ABSTRACT_CHARS = 500
 
 
 def main():
@@ -127,10 +130,13 @@ def main():
     details = efetch_details(ids)
 
     entries = []
-    for pmid in ids:
+    for pmid in ids[:12]:
         d = details.get(pmid)
         if not d or not d["abstract"]:
             continue
+        abstract = d["abstract"]
+        if len(abstract) > MAX_ABSTRACT_CHARS:
+            abstract = abstract[:MAX_ABSTRACT_CHARS] + "…"
         entries.append(
             f"### PMID {d['pmid']}\n"
             f"タイトル: {d['title']}\n"
@@ -138,7 +144,7 @@ def main():
             f"著者: {d['authors']}\n"
             f"DOI: {d['doi'] or '不明'}\n"
             f"リンク: {d['url']}\n"
-            f"アブストラクト: {d['abstract']}\n"
+            f"アブストラクト: {abstract}\n"
         )
 
     candidates_text = "\n---\n".join(entries) if entries else "(該当候補なし。今日は配信をスキップしてよい)"

@@ -27,7 +27,7 @@ jobs:
         with:
           prompt-file: /tmp/prompt.txt
           model: openai/gpt-4o
-          max-completion-tokens: 3000
+          max-tokens: 2000
 
       - name: Save digest
         if: steps.candidates.outputs.candidate_count != '0'
