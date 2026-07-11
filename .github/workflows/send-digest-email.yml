@@ -44,5 +44,5 @@ jobs:
           subject: "[生命科学ダイジェスト] ${{ steps.find.outputs.date }}"
           to: taruu6109@gmail.com
           from: "Life Science Digest <${{ secrets.GMAIL_USERNAME }}>"
-          body: file://${{ steps.find.outputs.file }}
+          html_body: file://${{ steps.find.outputs.file }}
           convert_markdown: true
