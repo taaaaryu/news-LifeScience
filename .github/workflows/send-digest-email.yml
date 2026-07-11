@@ -45,6 +45,12 @@ jobs:
           echo "file=$file" >> "$GITHUB_OUTPUT"
           echo "date=$(basename "$file" .md)" >> "$GITHUB_OUTPUT"
 
+      - name: Render styled HTML email
+        if: steps.find.outputs.file != ''
+        run: |
+          npx --yes marked < "${{ steps.find.outputs.file }}" > /tmp/fragment.html
+          node .github/scripts/wrap-email.mjs /tmp/fragment.html /tmp/email.html "${{ steps.find.outputs.date }}"
+
       - name: Send email
         if: steps.find.outputs.file != ''
         uses: dawidd6/action-send-mail@v3
@@ -56,5 +62,4 @@ jobs:
           subject: "[生命科学ダイジェスト] ${{ steps.find.outputs.date }}"
           to: taruu6109@gmail.com
           from: "Life Science Digest <${{ secrets.GMAIL_USERNAME }}>"
-          html_body: file://${{ steps.find.outputs.file }}
-          convert_markdown: true
+          html_body: file:///tmp/email.html
