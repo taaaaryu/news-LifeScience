@@ -1,0 +1,56 @@
+name: Generate Life Science Digest
+
+on:
+  schedule:
+    - cron: '55 21 * * *' # 06:55 JST
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  models: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch PubMed candidates and build prompt
+        id: candidates
+        run: python3 .github/scripts/fetch_pubmed.py
+
+      - name: Generate digest with GitHub Models
+        id: inference
+        if: steps.candidates.outputs.candidate_count != '0'
+        uses: actions/ai-inference@v1
+        with:
+          prompt-file: /tmp/prompt.txt
+          model: openai/gpt-4o
+          max-completion-tokens: 3000
+
+      - name: Save digest
+        if: steps.candidates.outputs.candidate_count != '0'
+        run: |
+          mkdir -p digests
+          cp "${{ steps.inference.outputs.response-file }}" "digests/${{ steps.candidates.outputs.date }}.md"
+
+      - name: Commit and push
+        if: steps.candidates.outputs.candidate_count != '0'
+        run: |
+          git config user.name "life-science-digest-bot"
+          git config user.email "actions@github.com"
+          git add digests
+          if git diff --cached --quiet; then
+            echo "no changes to commit"
+            exit 0
+          fi
+          git commit -m "digest: ${{ steps.candidates.outputs.date }}"
+          for i in 1 2 3; do
+            if git pull --rebase origin main && git push origin main; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "push failed after retries" >&2
+          exit 1
