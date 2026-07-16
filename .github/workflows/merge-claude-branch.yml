@@ -1,0 +1,78 @@
+name: Merge Claude Digest Branch and Send
+
+# Claude's cloud routine sometimes pushes its daily digest commit to a new
+# session branch (claude/**) instead of main. This workflow picks that up,
+# copies just the new digests/*.md file onto main, and sends the email
+# directly (a bot push using GITHUB_TOKEN does not trigger other workflows,
+# so send-digest-email.yml would never fire on its own here).
+
+on:
+  push:
+    branches:
+      - 'claude/**'
+
+permissions:
+  contents: write
+
+jobs:
+  merge-and-send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Find new digest file on this branch
+        id: find
+        run: |
+          git fetch origin "${{ github.ref_name }}"
+          file=$(git diff --name-only main "origin/${{ github.ref_name }}" -- 'digests/*.md' | tail -n1)
+          if [ -z "$file" ]; then
+            echo "no digest file on this branch, skipping"
+            echo "file=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          echo "date=$(basename "$file" .md)" >> "$GITHUB_OUTPUT"
+
+      - name: Copy digest file onto main and commit
+        if: steps.find.outputs.file != ''
+        run: |
+          git config user.name "life-science-digest-bot"
+          git config user.email "actions@github.com"
+          git checkout "origin/${{ github.ref_name }}" -- "${{ steps.find.outputs.file }}"
+          git add "${{ steps.find.outputs.file }}"
+          if git diff --cached --quiet; then
+            echo "no changes to commit"
+            exit 0
+          fi
+          git commit -m "digest: ${{ steps.find.outputs.date }} (merged from ${{ github.ref_name }})"
+          for i in 1 2 3; do
+            if git pull --rebase origin main && git push origin HEAD:main; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "push to main failed after retries" >&2
+          exit 1
+
+      - name: Render styled HTML email
+        if: steps.find.outputs.file != ''
+        run: |
+          npx --yes marked < "${{ steps.find.outputs.file }}" > /tmp/fragment.html
+          node .github/scripts/wrap-email.mjs /tmp/fragment.html /tmp/email.html "${{ steps.find.outputs.date }}"
+
+      - name: Send email
+        if: steps.find.outputs.file != ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.GMAIL_USERNAME }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          subject: "[生命科学ダイジェスト] ${{ steps.find.outputs.date }}"
+          to: taruu6109@gmail.com,aokinoko3msk@yahoo.co.jp
+          from: "Life Science Digest <${{ secrets.GMAIL_USERNAME }}>"
+          html_body: file:///tmp/email.html

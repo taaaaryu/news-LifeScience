@@ -1,8 +1,10 @@
 name: Generate Life Science Digest
 
+# Disabled from auto-schedule: research/generation now happens via the
+# Claude routine (trig_01V4NFhK3nV7LUL6sdCWXG8b) instead. This workflow is
+# kept for manual reference/testing only (workflow_dispatch). It also had a
+# non-existent model id (gpt-5.5) from an earlier experiment.
 on:
-  schedule:
-    - cron: '55 21 * * *' # 06:55 JST
   workflow_dispatch: {}
 
 permissions:
