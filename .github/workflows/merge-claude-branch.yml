@@ -73,6 +73,6 @@ jobs:
           username: ${{ secrets.GMAIL_USERNAME }}
           password: ${{ secrets.GMAIL_APP_PASSWORD }}
           subject: "[生命科学ダイジェスト] ${{ steps.find.outputs.date }}"
-          to: taruu6109@gmail.com,aokinoko3msk@yahoo.co.jp
+          to: taruu6109@gmail.com,aokinoko3msk@yahoo.co.jp,aoki.maya.s7@dc.tohoku.ac.jp
           from: "Life Science Digest <${{ secrets.GMAIL_USERNAME }}>"
           html_body: file:///tmp/email.html
