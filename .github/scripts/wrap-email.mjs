@@ -6,7 +6,46 @@ import { readFileSync, writeFileSync } from "node:fs";
 const [, , fragmentPath, outputPath, dateLabel] = process.argv;
 const fragment = readFileSync(fragmentPath, "utf8");
 
+const CATEGORY_VISUALS = {
+  "免疫制御・炎症": {
+    src: "https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/1f42d.png",
+    alt: "immunology",
+    label: "IMMUNOLOGY / INFLAMMATION",
+  },
+  "感染・ワクチン": {
+    src: "https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/1f9a0.png",
+    alt: "infection and vaccine",
+    label: "INFECTION / VACCINE",
+  },
+  "腫瘍免疫": {
+    src: "https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/1f42d.png",
+    alt: "tumor immunology",
+    label: "TUMOR IMMUNOLOGY",
+  },
+  "粘膜・アレルギー・微生物叢": {
+    src: "https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/1f9a0.png",
+    alt: "mucosal immunity and microbiome",
+    label: "MUCOSA / ALLERGY / MICROBIOME",
+  },
+  "機能形態・発生": {
+    src: "https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/1f52c.png",
+    alt: "functional morphology",
+    label: "MORPHOLOGY / DEVELOPMENT",
+  },
+};
+
+const explicitCategory = (html) => {
+  const match = html.match(/<strong>\s*カテゴリ[:：]\s*<\/strong>\s*([^<\n]+)/i);
+  return match ? match[1].trim() : null;
+};
+
 const iconFor = (html) => {
+  const category = explicitCategory(html);
+  if (category && CATEGORY_VISUALS[category]) {
+    return CATEGORY_VISUALS[category];
+  }
+
+  // Backward-compatible fallback for older digest files without explicit tags.
   const t = html.toLowerCase();
   if (t.includes("microbiota") || t.includes("細菌") || t.includes("iga")) {
     return { src: "https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/1f9a0.png", alt: "microbiota", label: "MICROBIOME" };
