@@ -1,25 +1,43 @@
 #!/usr/bin/env python3
-"""Fetch recent PubMed candidates (real, verified metadata + abstracts)
-and build the full prompt file for GitHub Models to write the digest from.
-No web browsing / no free-form generation of facts: the model is only
-allowed to describe what is present in the candidate list below.
+"""Fetch recent PubMed candidates and build the digest-generation prompt.
+
+The script is the source of truth for daily digest selection rules. It keeps
+candidate facts grounded in PubMed metadata/abstracts and excludes papers that
+were already introduced recently.
 """
 import json
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 TOOL = "life-science-digest"
 EMAIL = "taruu6109@gmail.com"
+JST = ZoneInfo("Asia/Tokyo")
 
 QUERIES = [
     '(immunology OR immunity OR "immune cell" OR "T cell" OR "innate immune") AND (mice OR mouse OR murine)',
     '("functional morphology" OR morphogenesis OR histology OR "tissue architecture") AND (mice OR mouse OR murine OR human)',
+]
+LOOKBACK_DAYS = (5, 10, 21)
+RECENT_DUPLICATE_DAYS = 30
+MAX_ABSTRACT_CHARS = 1800
+MAX_CANDIDATES = 18
+
+# One primary category per paper. Keep this taxonomy stable so weekly summaries
+# can count papers consistently across days.
+CATEGORY_TAXONOMY = [
+    "免疫制御・炎症",
+    "感染・ワクチン",
+    "腫瘍免疫",
+    "粘膜・アレルギー・微生物叢",
+    "機能形態・発生",
 ]
 
 
@@ -27,7 +45,7 @@ def esearch(query, reldate):
     params = {
         "db": "pubmed",
         "term": query,
-        "retmax": "15",
+        "retmax": "20",
         "sort": "date",
         "datetype": "pdat",
         "reldate": str(reldate),
@@ -93,7 +111,7 @@ def efetch_details(pmids):
         doi = ""
         for eid in article.findall(".//ELocationID"):
             if eid.get("EIdType") == "doi":
-                doi = eid.text
+                doi = (eid.text or "").strip()
         results[pmid] = {
             "pmid": pmid,
             "title": title,
@@ -107,38 +125,72 @@ def efetch_details(pmids):
     return results
 
 
+def recent_digest_files(days=RECENT_DUPLICATE_DAYS):
+    digest_dir = Path("digests")
+    if not digest_dir.exists():
+        return []
+    cutoff = datetime.now(JST).date() - timedelta(days=days)
+    files = []
+    for path in digest_dir.glob("????-??-??.md"):
+        try:
+            file_date = datetime.strptime(path.stem, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if file_date >= cutoff:
+            files.append(path)
+    return sorted(files)
+
+
+def load_recent_published_ids(days=RECENT_DUPLICATE_DAYS):
+    pmids = set()
+    dois = set()
+    for path in recent_digest_files(days):
+        text = path.read_text(encoding="utf-8")
+        pmids.update(re.findall(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d+)/?", text))
+        for doi in re.findall(r"(?im)^\s*(?:\*\*)?DOI(?:\*\*)?\s*[:：]\s*([^\s]+)", text):
+            dois.add(doi.strip().rstrip(".,;)").lower())
+    return pmids, dois
+
+
 def collect_candidates():
-    seen = set()
+    recent_pmids, _ = load_recent_published_ids()
+    seen = set(recent_pmids)
     ordered_ids = []
-    for reldate in (5, 10, 21):
-        for q in QUERIES:
-            for pmid in esearch(q, reldate):
-                if pmid not in seen:
-                    seen.add(pmid)
-                    ordered_ids.append(pmid)
+    source_query = {}
+
+    for reldate in LOOKBACK_DAYS:
+        for query_index, query in enumerate(QUERIES):
+            for pmid in esearch(query, reldate):
+                if pmid in seen:
+                    continue
+                seen.add(pmid)
+                ordered_ids.append(pmid)
+                source_query[pmid] = "immunology" if query_index == 0 else "morphology"
             time.sleep(0.4)
-        if len(ordered_ids) >= 8:
+        # A slightly larger pool than before helps preserve the default 2:1 topic balance.
+        if len(ordered_ids) >= 12:
             break
-    return ordered_ids[:15]
-
-
-MAX_ABSTRACT_CHARS = 500
+    return ordered_ids[:MAX_CANDIDATES], source_query
 
 
 def main():
-    ids = collect_candidates()
+    ids, source_query = collect_candidates()
     details = efetch_details(ids)
+    _, recent_dois = load_recent_published_ids()
 
     entries = []
-    for pmid in ids[:12]:
+    for pmid in ids:
         d = details.get(pmid)
         if not d or not d["abstract"]:
+            continue
+        if d["doi"] and d["doi"].lower() in recent_dois:
             continue
         abstract = d["abstract"]
         if len(abstract) > MAX_ABSTRACT_CHARS:
             abstract = abstract[:MAX_ABSTRACT_CHARS] + "…"
         entries.append(
             f"### PMID {d['pmid']}\n"
+            f"検索系統: {source_query.get(pmid, 'unknown')}\n"
             f"タイトル: {d['title']}\n"
             f"雑誌・日付: {d['journal']} ({d['date']})\n"
             f"著者: {d['authors']}\n"
@@ -146,35 +198,59 @@ def main():
             f"リンク: {d['url']}\n"
             f"アブストラクト: {abstract}\n"
         )
+        if len(entries) >= 15:
+            break
 
     candidates_text = "\n---\n".join(entries) if entries else "(該当候補なし。今日は配信をスキップしてよい)"
-
-    jst_date = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d")
+    jst_date = datetime.now(JST).strftime("%Y-%m-%d")
+    categories = " / ".join(CATEGORY_TAXONOMY)
 
     persona = f"""あなたは生命科学の「毎朝ダイジェスト」を作成するエージェントです。
 対象読者は、農学部の博士課程学生。専門はマウスを中心とした動物免疫学・機能形態学で、ヒトの免疫学にも一定の知識がある。
-物理学（光学・分光・工学的な測定原理など）は苦手なので、手法解説で物理が絡む場合は数式や専門的な物理用語を避け、身近な例えを使って平易に説明すること。
+物理学（光学・分光・工学的な測定原理など）は苦手なので、手法解説で物理が絡む場合は数式や専門的な物理用語を避け、必要なときだけ平易に説明すること。
 
 # 絶対条件（最重要・厳守）
-- 以下の「候補リスト」に書かれている情報（タイトル・著者・雑誌・日付・DOI・アブストラクト）だけを使う。候補リストに書かれていない具体的な数値・手法の詳細・結論を創作しない。
+- 以下の「候補リスト」に書かれている情報（PMID・タイトル・著者・雑誌・日付・DOI・リンク・アブストラクト）だけを使う。候補リストにない具体的な数値・手法の詳細・結論を創作しない。
 - アブストラクトに書かれていない情報は無理に埋めず「アブストラクトに記載なし」と明記する。
-- 候補リストにない論文は一切紹介しない。DOIやリンクは候補リストに記載のものをそのまま使う（自分で作らない）。
+- 候補リストにない論文は一切紹介しない。DOIやリンクは候補リストのものをそのまま使う。
+- 直近{RECENT_DUPLICATE_DAYS}日の日次digestに登場したPMID/DOIは候補から除外済み。過去配信と重複する論文を再紹介しない。
 
-# タスク
-候補リストの中から、新規性・研究のたねになる度合いを基準にちょうど3件を選ぶ。マウスモデルを用いた研究を優先してよい（ヒト免疫の研究も歓迎）。候補が薄い場合は、初学者向けの基礎知識解説に使えそうな候補を1件選んでもよい。
+# 選定
+- 十分な候補があればちょうど3件を選ぶ。
+- 基本バランスは「免疫系2件 + 機能形態・発生系1件」。ただし弱い論文を数合わせで採用せず、その日の候補の質を優先してよい。
+- 新規性、マウスモデルとの関連、実験設計として持ち帰れる点を重視する。
+- 同じ疾患・同じ細胞種・同じ手法に3件が偏りすぎないようにする。
+
+# カテゴリ
+各論文に、次の固定カテゴリから最も近いものを1つだけ付ける：
+{categories}
+カテゴリはWeekly集計に使うので表記を変えない。
 
 # 各項目に書くこと
-1. タイトル（日本語訳＋原題）と 掲載先・日付
-2. 何が新しいか: 従来と比べ何が分かった/できるようになったか（1〜3文、アブストラクトの範囲で）
-3. 手法（どうやったか）: アブストラクトに記載された実験・解析手法を具体的に。マウス実験であれば系統・モデル名などアブストラクトに書かれていれば触れる。手法の一般原理も1〜2文添えるが、光学・分光・物理的な仕組み（レーザー・波長・光子など）が絡む場合は数式や専門的な物理用語を使わず、身近な例えで平易に説明する。読者は生物実験手法には慣れているが物理は苦手という前提で書く。
-4. なぜ重要か / 研究のたね: この学生の研究（マウスモデル中心）にどうつながりうるか
-5. リンク（候補リストに記載のURL・DOIをそのまま使う）
+1. タイトル（日本語訳＋原題）、掲載先・日付、著者、カテゴリ
+2. 何が新しいか：従来と比べ何が分かった/できるようになったか。1〜3文。アブストラクトの範囲だけ。
+3. 手法（どうやったか）：アブストラクトに記載された実験・解析手法を具体的に。マウス系統・モデル名が書かれていれば触れる。一般原理の説明は必要な場合だけ。
+4. 実験設計メモ：この論文からマウス実験・機能形態学へ持ち帰れる具体的な設計上の1点を1〜2文で書く。抽象的な「重要」「参考になる」「応用できる」で埋めない。特に持ち帰る点がなければ「特記なし」でよい。
+5. PMID、PubMedリンク、DOIを候補リストどおり記載する。
+
+# 文体
+- knowledgeableな研究室メンバーが朝に同僚へ渡す短いメモの日本語。
+- 定型的な導入・結びを避ける。「〜と言えるでしょう」「〜が期待されます」「非常に興味深い」「注目すべき」「重要な示唆を与える」「研究のたねになりそうです」は原則使わない。
+- タイトルを本文1文目で言い換えて繰り返さない。
+- 同じ文型、同じ締め方を3本で反復しない。
+- 具体的に、何を測った・比較した・変わった・観察したかを書く。
+- 技術用語は読者が知っているものなら普通に使い、過剰説明しない。
+- エビデンスが限定的なら、その限界を短く明記する。
+- 太字を増やしすぎない。
 
 # 出力形式
-- 日本語。朝に数分で読める簡潔な分量。Markdown。
-- 冒頭に `# 生命科学 毎朝ダイジェスト（{jst_date}）` という見出しと、選んだ3件を総括する「今日の一言」を1段落で書く。
-- そのあとに `---` 区切り線、続けて `## 1. …` `## 2. …` `## 3. …` の3項目。
-- 前置きや後書きの雑談、コードフェンス（```）は書かない。Markdown本文のみを出力する。
+- 日本語、Markdown、朝に数分で読める分量。
+- 冒頭は `# 生命科学 毎朝ダイジェスト（{jst_date}）`。
+- 「今日の一言」は、本当に3本に共通する軸がある場合だけ1段落でまとめる。共通軸が弱ければ、3本の内容を短く並べるだけでよい。無理に物語を作らない。
+- `---` の後に `## 1. …` `## 2. …` `## 3. …`。
+- 各論文のメタデータ内に必ず `**カテゴリ:** <固定カテゴリ名>` と `**PMID:** <PMID>` を入れる。
+- セクション見出しは `### 何が新しいか` `### 手法（どうやったか）` `### 実験設計メモ`。
+- 前置き・後書きの雑談、コードフェンスは書かない。
 
 # 候補リスト
 {candidates_text}
